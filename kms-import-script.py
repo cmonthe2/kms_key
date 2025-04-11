@@ -2,6 +2,8 @@
 import boto3
 import json
 import os
+import sys
+import getpass
 from datetime import datetime
 
 def datetime_converter(o):
@@ -10,9 +12,34 @@ def datetime_converter(o):
         return o.isoformat()
     raise TypeError(f"Object of type {type(o)} is not JSON serializable")
 
+def get_credentials():
+    """Get AWS credentials from user input"""
+    print("Please enter your AWS credentials:")
+    aws_access_key_id = input("AWS Access Key ID: ")
+    aws_secret_access_key = getpass.getpass("AWS Secret Access Key: ")
+    aws_region = input("AWS Region (default: us-east-1): ") or "us-east-1"
+    
+    return {
+        'aws_access_key_id': aws_access_key_id,
+        'aws_secret_access_key': aws_secret_access_key,
+        'region_name': aws_region
+    }
+
 def main():
-    # Initialize boto3 client for KMS
-    kms_client = boto3.client('kms')
+    # Get credentials from user input
+    credentials = get_credentials()
+    
+    # Initialize boto3 client for KMS with explicit credentials
+    try:
+        kms_client = boto3.client(
+            'kms',
+            aws_access_key_id=credentials['aws_access_key_id'],
+            aws_secret_access_key=credentials['aws_secret_access_key'],
+            region_name=credentials['region_name']
+        )
+    except Exception as e:
+        print(f"Error initializing AWS client: {e}")
+        sys.exit(1)
     
     # Create directory for output files if it doesn't exist
     output_dir = "terraform-kms-import"
@@ -25,15 +52,20 @@ def main():
     os.makedirs(kms_module_dir, exist_ok=True)
     
     # Get list of all KMS keys in the account
-    keys = []
-    response = kms_client.list_keys()
-    keys.extend(response['Keys'])
-    
-    while response.get('Truncated', False):
-        response = kms_client.list_keys(Marker=response['NextMarker'])
+    try:
+        print("Fetching KMS keys...")
+        keys = []
+        response = kms_client.list_keys()
         keys.extend(response['Keys'])
-    
-    print(f"Found {len(keys)} KMS keys in your account.")
+        
+        while response.get('Truncated', False):
+            response = kms_client.list_keys(Marker=response['NextMarker'])
+            keys.extend(response['Keys'])
+        
+        print(f"Found {len(keys)} KMS keys in your account.")
+    except Exception as e:
+        print(f"Error fetching KMS keys: {e}")
+        sys.exit(1)
     
     # Create module files
     module_main_tf_path = os.path.join(kms_module_dir, "main.tf")
@@ -117,14 +149,14 @@ resource "aws_kms_alias" "this" {
 }
 """
 
-    # Create providers.tf
-    providers_content = """
-provider "aws" {
-  region = var.aws_region
+    # Create providers.tf with the user's region
+    providers_content = f"""
+provider "aws" {{
+  region = "{credentials['region_name']}"
   
-  # Uncomment if you need to specify a profile
-  # profile = var.aws_profile
-}
+  # Credentials are intentionally not stored in the configuration
+  # Use AWS environment variables, shared credentials file, or AWS CLI configuration
+}}
 """
 
     # Create terraform.tf
@@ -142,19 +174,12 @@ terraform {
 """
 
     # Create root variables.tf
-    root_variables_content = """
-variable "aws_region" {
+    root_variables_content = f"""
+variable "aws_region" {{
   description = "The AWS region to deploy resources"
   type        = string
-  default     = "us-east-1"
-}
-
-# Uncomment if you need to specify a profile
-# variable "aws_profile" {
-#   description = "The AWS profile to use"
-#   type        = string
-#   default     = "default"
-# }
+  default     = "{credentials['region_name']}"
+}}
 """
 
     # Write shared module files
@@ -179,6 +204,12 @@ variable "aws_region" {
     
     # Initialize import commands
     import_commands = "#!/bin/bash\n\n"
+    import_commands += f"# This script assumes AWS credentials are available in the environment\n"
+    import_commands += f"# Run the following commands before executing this script:\n"
+    import_commands += f"# export AWS_ACCESS_KEY_ID=your_access_key\n"
+    import_commands += f"# export AWS_SECRET_ACCESS_KEY=your_secret_key\n"
+    import_commands += f"# export AWS_DEFAULT_REGION={credentials['region_name']}\n\n"
+    
     root_main_content = ""
     root_outputs_content = ""
     
@@ -295,6 +326,9 @@ output "{resource_name}_key_arn" {{
     print(f"Import commands written to {import_script_path}")
     print(f"\nTo import the keys, run:")
     print(f"  cd {output_dir}")
+    print(f"  export AWS_ACCESS_KEY_ID={credentials['aws_access_key_id']}")
+    print(f"  export AWS_SECRET_ACCESS_KEY=your_secret_key")
+    print(f"  export AWS_DEFAULT_REGION={credentials['region_name']}")
     print(f"  terraform init")
     print(f"  ./import-keys.sh")
 
