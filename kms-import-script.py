@@ -2,174 +2,61 @@
 import boto3
 import json
 import os
-import argparse
-from botocore.exceptions import ClientError
+from datetime import datetime
 
-def get_kms_keys(region, profile=None):
-    """Get all KMS keys in the specified region"""
-    session = boto3.Session(profile_name=profile, region_name=region)
-    kms_client = session.client('kms')
-    
-    try:
-        # List all keys
-        paginator = kms_client.get_paginator('list_keys')
-        keys = []
-        
-        for page in paginator.paginate():
-            keys.extend(page['Keys'])
-        
-        # Get detailed information for each key
-        detailed_keys = []
-        for key in keys:
-            key_id = key['KeyId']
-            try:
-                # Get key details
-                key_details = kms_client.describe_key(KeyId=key_id)
-                
-                # Skip AWS managed keys if needed
-                if key_details['KeyMetadata'].get('KeyManager') == 'AWS':
-                    continue
-                
-                # Get aliases for this key
-                aliases_response = kms_client.list_aliases(KeyId=key_id)
-                aliases = aliases_response.get('Aliases', [])
-                
-                # Get key policy
-                policy_response = kms_client.get_key_policy(KeyId=key_id, PolicyName='default')
-                policy = json.loads(policy_response['Policy'])
-                
-                # Get tags if any
-                try:
-                    tags_response = kms_client.list_resource_tags(KeyId=key_id)
-                    tags = tags_response.get('Tags', [])
-                except ClientError:
-                    tags = []
-                
-                # Add all info to our detailed keys list
-                detailed_keys.append({
-                    'KeyMetadata': key_details['KeyMetadata'],
-                    'Aliases': aliases,
-                    'Policy': policy,
-                    'Tags': tags
-                })
-                
-            except ClientError as e:
-                print(f"Error getting details for key {key_id}: {e}")
-                continue
-        
-        return detailed_keys
-    
-    except ClientError as e:
-        print(f"Error listing KMS keys: {e}")
-        return []
+def datetime_converter(o):
+    """Helper function to convert datetime objects to strings for JSON serialization"""
+    if isinstance(o, datetime):
+        return o.isoformat()
+    raise TypeError(f"Object of type {type(o)} is not JSON serializable")
 
-def generate_terraform_config(keys, output_dir):
-    """Generate Terraform configuration for KMS keys"""
+def main():
+    # Initialize boto3 client for KMS
+    kms_client = boto3.client('kms')
+    
+    # Create directory for output files if it doesn't exist
+    output_dir = "terraform-kms-import"
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     
-    # Create main.tf for the KMS resources
-    main_tf_path = os.path.join(output_dir, 'main.tf')
-    import_script_path = os.path.join(output_dir, 'import-keys.sh')
+    # Create module directory structure
+    modules_dir = os.path.join(output_dir, "modules")
+    kms_module_dir = os.path.join(modules_dir, "kms")
+    os.makedirs(kms_module_dir, exist_ok=True)
     
-    with open(main_tf_path, 'w') as main_tf, open(import_script_path, 'w') as import_script:
-        # Add shebang to import script
-        import_script.write('#!/bin/bash\n\n')
-        
-        # Write provider block
-        main_tf.write('provider "aws" {\n  region = "' + keys[0]['KeyMetadata']['Arn'].split(':')[3] + '"\n}\n\n')
-        
-        for key_data in keys:
-            key_metadata = key_data['KeyMetadata']
-            key_id = key_metadata['KeyId']
-            key_arn = key_metadata['Arn']
-            
-            # Create a Terraform resource name (sanitized)
-            resource_name = f"key_{key_id.replace('-', '_')}"
-            
-            # Write the KMS key resource
-            main_tf.write(f'resource "aws_kms_key" "{resource_name}" {{\n')
-            main_tf.write(f'  description             = "{key_metadata.get("Description", "Imported KMS Key")}"\n')
-            main_tf.write(f'  deletion_window_in_days = 30\n')  # Default - adjust as needed
-            main_tf.write(f'  key_usage               = "{key_metadata.get("KeyUsage", "ENCRYPT_DECRYPT")}"\n')
-            
-            if 'MultiRegion' in key_metadata:
-                main_tf.write(f'  multi_region = {str(key_metadata["MultiRegion"]).lower()}\n')
-            
-            if key_metadata.get('CustomerMasterKeySpec'):
-                main_tf.write(f'  customer_master_key_spec = "{key_metadata["CustomerMasterKeySpec"]}"\n')
-            
-            if key_metadata.get('KeyState') != 'Enabled':
-                main_tf.write(f'  is_enabled = false\n')
-            
-            # Write the policy
-            policy_json = json.dumps(key_data['Policy'], indent=2)
-            main_tf.write(f'  policy = <<POLICY\n{policy_json}\nPOLICY\n')
-            
-            # Write tags if any
-            if key_data['Tags']:
-                main_tf.write('  tags = {\n')
-                for tag in key_data['Tags']:
-                    main_tf.write(f'    {tag["TagKey"]} = "{tag["TagValue"]}"\n')
-                main_tf.write('  }\n')
-            
-            main_tf.write('}\n\n')
-            
-            # Write aliases if any
-            for alias in key_data['Aliases']:
-                alias_name = alias['AliasName']
-                alias_resource_name = f"alias_{alias_name.replace('alias/', '').replace('-', '_').replace('/', '_')}"
-                
-                main_tf.write(f'resource "aws_kms_alias" "{alias_resource_name}" {{\n')
-                main_tf.write(f'  name          = "{alias_name}"\n')
-                main_tf.write(f'  target_key_id = aws_kms_key.{resource_name}.key_id\n')
-                main_tf.write('}\n\n')
-                
-                # Write import command for alias
-                import_script.write(f'terraform import aws_kms_alias.{alias_resource_name} {alias_name}\n')
-            
-            # Write import command for key
-            import_script.write(f'terraform import aws_kms_key.{resource_name} {key_arn}\n\n')
+    # Get list of all KMS keys in the account
+    keys = []
+    response = kms_client.list_keys()
+    keys.extend(response['Keys'])
     
-    # Make the import script executable
-    os.chmod(import_script_path, 0o755)
+    while response.get('Truncated', False):
+        response = kms_client.list_keys(Marker=response['NextMarker'])
+        keys.extend(response['Keys'])
     
-    print(f"Terraform configuration written to {main_tf_path}")
-    print(f"Import script written to {import_script_path}")
-
-def generate_module_structure(output_dir):
-    """Generate a reusable KMS module structure"""
-    module_dir = os.path.join(output_dir, 'modules', 'kms')
+    print(f"Found {len(keys)} KMS keys in your account.")
     
-    if not os.path.exists(module_dir):
-        os.makedirs(module_dir)
+    # Create module files
+    module_main_tf_path = os.path.join(kms_module_dir, "main.tf")
+    module_variables_tf_path = os.path.join(kms_module_dir, "variables.tf")
+    module_outputs_tf_path = os.path.join(kms_module_dir, "outputs.tf")
     
-    # Create main.tf
-    with open(os.path.join(module_dir, 'main.tf'), 'w') as f:
-        f.write('''resource "aws_kms_key" "key" {
-  description             = var.description
-  deletion_window_in_days = var.deletion_window_in_days
-  enable_key_rotation     = var.enable_key_rotation
-  policy                  = var.policy
-  tags                    = var.tags
-  key_usage               = var.key_usage
-  customer_master_key_spec = var.customer_master_key_spec
-  multi_region            = var.multi_region
-}
-
-resource "aws_kms_alias" "alias" {
-  count         = var.alias_name != "" ? 1 : 0
-  name          = "alias/${var.alias_name}"
-  target_key_id = aws_kms_key.key.id
-}
-''')
+    # Create root module files
+    root_main_tf_path = os.path.join(output_dir, "main.tf")
+    root_variables_tf_path = os.path.join(output_dir, "variables.tf")
+    root_outputs_tf_path = os.path.join(output_dir, "outputs.tf")
+    providers_tf_path = os.path.join(output_dir, "providers.tf")
+    terraform_tf_path = os.path.join(output_dir, "terraform.tf")
     
-    # Create variables.tf
-    with open(os.path.join(module_dir, 'variables.tf'), 'w') as f:
-        f.write('''variable "description" {
-  description = "Description for the KMS key"
+    # Create import script
+    import_script_path = os.path.join(output_dir, "import-keys.sh")
+    
+    # Variables for our files
+    module_main_content = ""
+    module_variables_content = """
+variable "description" {
+  description = "The description of the KMS key"
   type        = string
-  default     = "KMS key managed by Terraform"
+  default     = "KMS key for encryption"
 }
 
 variable "deletion_window_in_days" {
@@ -184,119 +71,232 @@ variable "enable_key_rotation" {
   default     = true
 }
 
-variable "alias_name" {
-  description = "The name of the key alias without the alias/ prefix"
-  type        = string
-  default     = ""
-}
-
-variable "policy" {
-  description = "A valid KMS policy JSON document"
-  type        = string
-  default     = null
-}
-
 variable "tags" {
-  description = "A map of tags to add to the KMS key"
+  description = "A map of tags to assign to the resource"
   type        = map(string)
   default     = {}
 }
 
-variable "key_usage" {
-  description = "Specifies the intended use of the key"
-  type        = string
-  default     = "ENCRYPT_DECRYPT"
+variable "aliases" {
+  description = "A list of aliases to create for the key"
+  type        = list(string)
+  default     = []
 }
+"""
 
-variable "customer_master_key_spec" {
-  description = "Specifies whether the key contains a symmetric key or an asymmetric key pair"
-  type        = string
-  default     = "SYMMETRIC_DEFAULT"
-}
-
-variable "multi_region" {
-  description = "Indicates whether the KMS key is a multi-Region key"
-  type        = bool
-  default     = false
-}
-''')
-    
-    # Create outputs.tf
-    with open(os.path.join(module_dir, 'outputs.tf'), 'w') as f:
-        f.write('''output "key_id" {
+    module_outputs_content = """
+output "key_id" {
   description = "The globally unique identifier for the key"
-  value       = aws_kms_key.key.id
+  value       = aws_kms_key.this.key_id
 }
 
 output "key_arn" {
   description = "The Amazon Resource Name (ARN) of the key"
-  value       = aws_kms_key.key.arn
+  value       = aws_kms_key.this.arn
 }
 
-output "alias_arn" {
-  description = "The Amazon Resource Name (ARN) of the key alias"
-  value       = length(aws_kms_alias.alias) > 0 ? aws_kms_alias.alias[0].arn : null
+output "aliases" {
+  description = "A list of all aliases for the key"
+  value       = [for a in aws_kms_alias.this : a.name]
 }
-''')
+"""
+
+    # Create KMS module main.tf
+    module_main_content = """
+resource "aws_kms_key" "this" {
+  description             = var.description
+  deletion_window_in_days = var.deletion_window_in_days
+  enable_key_rotation     = var.enable_key_rotation
+  tags                    = var.tags
+}
+
+resource "aws_kms_alias" "this" {
+  for_each      = toset(var.aliases)
+  name          = each.value
+  target_key_id = aws_kms_key.this.key_id
+}
+"""
+
+    # Create providers.tf
+    providers_content = """
+provider "aws" {
+  region = var.aws_region
+  
+  # Uncomment if you need to specify a profile
+  # profile = var.aws_profile
+}
+"""
+
+    # Create terraform.tf
+    terraform_content = """
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+  
+  required_version = ">= 1.0.0"
+}
+"""
+
+    # Create root variables.tf
+    root_variables_content = """
+variable "aws_region" {
+  description = "The AWS region to deploy resources"
+  type        = string
+  default     = "us-east-1"
+}
+
+# Uncomment if you need to specify a profile
+# variable "aws_profile" {
+#   description = "The AWS profile to use"
+#   type        = string
+#   default     = "default"
+# }
+"""
+
+    # Write shared module files
+    with open(module_main_tf_path, 'w') as f:
+        f.write(module_main_content)
     
-    # Create example usage file
-    with open(os.path.join(output_dir, 'module_example.tf'), 'w') as f:
-        f.write('''module "encryption_key" {
+    with open(module_variables_tf_path, 'w') as f:
+        f.write(module_variables_content)
+    
+    with open(module_outputs_tf_path, 'w') as f:
+        f.write(module_outputs_content)
+    
+    # Write root module shared files
+    with open(providers_tf_path, 'w') as f:
+        f.write(providers_content)
+    
+    with open(terraform_tf_path, 'w') as f:
+        f.write(terraform_content)
+    
+    with open(root_variables_tf_path, 'w') as f:
+        f.write(root_variables_content)
+    
+    # Initialize import commands
+    import_commands = "#!/bin/bash\n\n"
+    root_main_content = ""
+    root_outputs_content = ""
+    
+    # Process each key to create module instances in the root module
+    for key in keys:
+        key_id = key['KeyId']
+        
+        # Get detailed information about the key
+        try:
+            key_info = kms_client.describe_key(KeyId=key_id)
+            # Skip AWS managed keys as they cannot be imported into Terraform
+            if key_info['KeyMetadata'].get('KeyManager') == 'AWS':
+                print(f"Skipping AWS managed key: {key_id}")
+                continue
+                
+            # Get key aliases
+            alias_response = kms_client.list_aliases(KeyId=key_id)
+            aliases = alias_response.get('Aliases', [])
+            
+            # Get key tags
+            try:
+                tag_response = kms_client.list_resource_tags(KeyId=key_id)
+                tags = tag_response.get('Tags', [])
+            except Exception as e:
+                print(f"Could not get tags for key {key_id}: {e}")
+                tags = []
+            
+            # Generate a resource name based on key ID
+            # Replace dashes with underscores for valid Terraform identifiers
+            resource_name = f"key_{key_id.replace('-', '_')}"
+            
+            # Get key rotation status
+            try:
+                rotation_response = kms_client.get_key_rotation_status(KeyId=key_id)
+                key_rotation_enabled = rotation_response.get('KeyRotationEnabled', False)
+            except Exception as e:
+                print(f"Could not get rotation status for key {key_id}: {e}")
+                key_rotation_enabled = False
+            
+            # Create module instance in root main.tf
+            module_instance = f"""
+module "{resource_name}" {{
   source = "./modules/kms"
   
-  description          = "Encryption key for application data"
-  alias_name           = "app-data-encryption-key"
-  enable_key_rotation  = true
-  
-  # Optional custom policy
-  policy = <<POLICY
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "Enable IAM User Permissions",
-      "Effect": "Allow",
-      "Principal": {
-        "AWS": "arn:aws:iam:204469479814:root"
-      },
-      "Action": "kms:*",
-      "Resource": "*"
-    }
-  ]
-}
-POLICY
-  
-  tags = {
-    Environment = "Production"
-    Project     = "MyApp"
-  }
-}
-''')
-    
-    print(f"Module structure created in {module_dir}")
-    print(f"Module usage example written to {os.path.join(output_dir, 'module_example.tf')}")
+  description             = "{key_info['KeyMetadata'].get('Description', 'Imported KMS key')}"
+  deletion_window_in_days = 30
+  enable_key_rotation     = {str(key_rotation_enabled).lower()}
+"""
+            
+            # Add tags if any
+            if tags:
+                module_instance += "  tags = {\n"
+                for tag in tags:
+                    module_instance += f'    {tag["TagKey"]} = "{tag["TagValue"]}"\n'
+                module_instance += "  }\n"
+            
+            # Add aliases if any
+            if aliases:
+                module_instance += "  aliases = [\n"
+                for alias in aliases:
+                    module_instance += f'    "{alias["AliasName"]}",\n'
+                module_instance += "  ]\n"
+            
+            module_instance += "}\n"
+            
+            # Add outputs for this key
+            root_outputs_content += f"""
+output "{resource_name}_key_id" {{
+  description = "The ID of the {resource_name} key"
+  value       = module.{resource_name}.key_id
+}}
 
-def main():
-    parser = argparse.ArgumentParser(description='Import KMS keys to Terraform')
-    parser.add_argument('--region', required=True, help='AWS region')
-    parser.add_argument('--profile', help='AWS profile')
-    parser.add_argument('--output-dir', default='terraform-kms', help='Output directory for Terraform files')
-    parser.add_argument('--create-module', action='store_true', help='Create a reusable KMS module')
+output "{resource_name}_key_arn" {{
+  description = "The ARN of the {resource_name} key"
+  value       = module.{resource_name}.key_arn
+}}
+"""
+            
+            root_main_content += module_instance
+            
+            # Create import command for the key
+            import_commands += f"terraform import 'module.{resource_name}.aws_kms_key.this' {key_id}\n"
+            
+            # Add import commands for aliases
+            for i, alias in enumerate(aliases):
+                alias_name = alias['AliasName']
+                import_commands += f"terraform import 'module.{resource_name}.aws_kms_alias.this[\"{alias_name}\"]' {alias_name}\n"
+            
+            # Save detailed key information to a JSON file for reference
+            key_info_path = os.path.join(output_dir, f"{key_id}.json")
+            with open(key_info_path, 'w') as f:
+                json.dump(key_info, f, default=datetime_converter, indent=2)
+            
+            print(f"Processed key: {key_id}")
+            
+        except Exception as e:
+            print(f"Error processing key {key_id}: {e}")
     
-    args = parser.parse_args()
+    # Write root main.tf
+    with open(root_main_tf_path, 'w') as f:
+        f.write(root_main_content)
     
-    print(f"Retrieving KMS keys from region {args.region}...")
-    keys = get_kms_keys(args.region, args.profile)
+    # Write root outputs.tf
+    with open(root_outputs_tf_path, 'w') as f:
+        f.write(root_outputs_content)
     
-    if not keys:
-        print("No customer managed KMS keys found.")
-        return
+    # Write import commands to import script and make it executable
+    with open(import_script_path, 'w') as f:
+        f.write(import_commands)
     
-    print(f"Found {len(keys)} customer managed KMS keys.")
-    generate_terraform_config(keys, args.output_dir)
+    os.chmod(import_script_path, 0o755)
     
-    if args.create_module:
-        generate_module_structure(args.output_dir)
+    print(f"\nTerraform module structure created in {output_dir}/")
+    print(f"Import commands written to {import_script_path}")
+    print(f"\nTo import the keys, run:")
+    print(f"  cd {output_dir}")
+    print(f"  terraform init")
+    print(f"  ./import-keys.sh")
 
 if __name__ == "__main__":
     main()
