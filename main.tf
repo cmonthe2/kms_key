@@ -12,3 +12,6 @@ python3 kms-import-script.py --region us-east-1 --output-dir my-terraform-dir
 
 
 python3 kms-import-script.py --region us-west-2
+
+LIST OF KEYS 
+aws kms list-keys --region us-east-1
