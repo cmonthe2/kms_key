@@ -1,4 +1,6 @@
 # Basic usage
+
+python3 sns_to_terraform.py
 python3 kms-import-script.py --region us-east-1
 
 # Using a specific AWS profile
