@@ -2,6 +2,7 @@
 import boto3
 import json
 import os
+import argparse
 from datetime import datetime
 
 def datetime_converter(o):
@@ -11,8 +12,19 @@ def datetime_converter(o):
     raise TypeError(f"Object of type {type(o)} is not JSON serializable")
 
 def main():
-    # Initialize boto3 client for KMS
-    kms_client = boto3.client('kms')
+    # Add command-line argument parsing for AWS profile
+    parser = argparse.ArgumentParser(description='Create Terraform configuration for existing KMS keys')
+    parser.add_argument('--profile', type=str, default='default',
+                        help='AWS profile to use (default: default)')
+    args = parser.parse_args()
+    
+    # Initialize boto3 session with the specified profile
+    session = boto3.Session(profile_name=args.profile)
+    
+    # Initialize boto3 client for KMS using the session
+    kms_client = session.client('kms')
+    
+    print(f"Using AWS profile: {args.profile}")
     
     # Create directory for output files if it doesn't exist
     output_dir = "terraform-kms-import"
@@ -117,13 +129,13 @@ resource "aws_kms_alias" "this" {
 }
 """
 
-    # Create providers.tf
+    # Create providers.tf - now with profile variable uncommented
     providers_content = """
 provider "aws" {
   region = var.aws_region
   
-  # Uncomment if you need to specify a profile
-  # profile = var.aws_profile
+  # Profile is now included by default
+  profile = var.aws_profile
 }
 """
 
@@ -141,7 +153,7 @@ terraform {
 }
 """
 
-    # Create root variables.tf
+    # Create root variables.tf - now with profile variable uncommented
     root_variables_content = """
 variable "aws_region" {
   description = "The AWS region to deploy resources"
@@ -149,13 +161,13 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-# Uncomment if you need to specify a profile
-# variable "aws_profile" {
-#   description = "The AWS profile to use"
-#   type        = string
-#   default     = "default"
-# }
-"""
+# AWS profile variable is now uncommented and set to the profile used for script execution
+variable "aws_profile" {
+  description = "The AWS profile to use"
+  type        = string
+  default     = "%s"
+}
+""" % args.profile
 
     # Write shared module files
     with open(module_main_tf_path, 'w') as f:
@@ -297,6 +309,7 @@ output "{resource_name}_key_arn" {{
     print(f"  cd {output_dir}")
     print(f"  terraform init")
     print(f"  ./import-keys.sh")
+    print(f"\nThe Terraform configuration is set to use the AWS profile: {args.profile}")
 
 if __name__ == "__main__":
     main()
