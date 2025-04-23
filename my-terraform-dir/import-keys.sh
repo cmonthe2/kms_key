@@ -14,6 +14,20 @@ aws kms describe-key --key-id <your-key-id> \
   --output table
 
 
+resource "aws_kms_key" "monthly_key" {
+  description             = "Encrypt monthly reports"
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
+
+  customer_master_key_spec = "SYMMETRIC_DEFAULT"
+  key_usage                = "ENCRYPT_DECRYPT"
+  tags = {
+    Owner = "DataTeam"
+    Env   = "Prod"
+  }
+}
+
+
 
 
 
