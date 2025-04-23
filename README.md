@@ -72,3 +72,12 @@ Traceback (most recent call last):
     raise error_class(parsed_response, operation_name)
 botocore.exceptions.ClientError: An error occurred (ForbiddenException) when calling the GetRoleCredentials operation: No access
 ➜  terraform                                                                                                                        
+
+
+
+
+aws kms get-key-policy \
+  --key-id 1234abcd-5678-efgh-9012-ijklmnopqrst \
+  --policy-name default \
+  --profile your-profile-name
+
