@@ -9,6 +9,14 @@ resource "aws_kms_key" "monthly_key" {
 }
 
 
+aws kms describe-key --key-id <your-key-id> \
+  --query 'KeyMetadata.[KeySpec, KeyUsage, KeyManager, KeyState, Origin, KeyType]' \
+  --output table
+
+
+
+
+
 
 
 
