@@ -9,6 +9,14 @@ resource "aws_kms_key" "monthly_key" {
 }
 
 
+resource "aws_kms_alias" "monthly_key_alias" {
+  name          = "alias/monthly-key"
+  target_key_id = aws_kms_key.monthly_key.key_id
+}
+
+
+
+
 aws kms describe-key --key-id <your-key-id> \
   --query 'KeyMetadata.[KeySpec, KeyUsage, KeyManager, KeyState, Origin, KeyType]' \
   --output table
