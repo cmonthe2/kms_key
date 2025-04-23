@@ -1,5 +1,42 @@
-#!/bin/bash
+resource "aws_kms_key" "monthly_key" {
+  description             = "Monthly usage encryption key"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+  tags = {
+    Environment = "prod"
+    Team        = "Security"
+  }
+}
 
-terraform import aws_kms_alias.alias_monthe alias/monthe
-terraform import aws_kms_key.key_f7fd450e_22b4_4c71_babc_debdcf8b4803 arn:aws:kms:us-east-1:204469479814:key/f7fd450e-22b4-4c71-babc-debdcf8b4803
 
+
+
+
+resource "aws_kms_key_policy" "monthly_key_policy" {
+  key_id = aws_kms_key.monthly_key.key_id
+  policy = jsonencode({
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "AWS": "arn:aws:iam::123456789012:root"
+        },
+        "Action": "kms:*",
+        "Resource": "*"
+      },
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "AWS": "arn:aws:iam::123456789012:role/KMSAccessRole"
+        },
+        "Action": [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:GenerateDataKey"
+        ],
+        "Resource": "*"
+      }
+    ]
+  })
+}
