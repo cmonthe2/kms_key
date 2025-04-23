@@ -32,3 +32,13 @@ sso_start_url = https://d-ffr5555.awsapps.com/start/#
 sso_region = us-west-2
  
 sso_registration_scopes = sso:account:access
+
+
+
+for key in $(aws kms list-keys --query 'Keys[*].KeyId' --output text); do
+  manager=$(aws kms describe-key --key-id "$key" --query 'KeyMetadata.KeyManager' --output text)
+  if [ "$manager" == "CUSTOMER" ]; then
+    echo "$key"
+    aws kms list-aliases --query "Aliases[?TargetKeyId=='$key'].AliasName" --output text
+  fi
+done > included_resources.txt
