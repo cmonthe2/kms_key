@@ -34,6 +34,15 @@ sso_region = us-west-2
 sso_registration_scopes = sso:account:access
 
 
+aws kms get-key-policy \
+  --key-id <key-id> \
+  --policy-name default \
+  --profile <your-profile>
+
+
+
+
+
 
 for key in $(aws kms list-keys --query 'Keys[*].KeyId' --output text); do
   manager=$(aws kms describe-key --key-id "$key" --query 'KeyMetadata.KeyManager' --output text)
