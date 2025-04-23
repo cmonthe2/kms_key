@@ -1,23 +1,25 @@
-# Basic usage
 
-python3 sns_to_terraform.py
+import boto3
+import json
 
-Create a new env
-python3 -m venv .venv
+AWS_PROFILE = "default"  # Change if needed
+KEY_ID = "1234abcd-5678-efgh-9012-ijklmnopqrst"  # Replace with your actual KMS Key ID
+RESOURCE_NAME = "monthly_key"
 
-# Activate it
-source .venv/bin/activate
+session = boto3.Session(profile_name=AWS_PROFILE)
+kms = session.client('kms')
 
-# Install required packages
-pip3 install boto3
+# Fetch the actual key policy
+response = kms.get_key_policy(KeyId=KEY_ID, PolicyName="default")
+policy_json = json.loads(response["Policy"])
 
-# Run your script
-python sns_to_terraform.py
-
-
- cd module then run terraform init
-
- run the cmd in import.py
+# Generate Terraform block
+print(f'resource "aws_kms_key_policy" "{RESOURCE_NAME}_policy" {{')
+print(f'  key_id = aws_kms_key.{RESOURCE_NAME}.key_id')
+print('  policy = jsonencode(')
+print(json.dumps(policy_json, indent=2))
+print('  )')
+print('}')
 
 
 python3 kms-import-script.py --region us-east-1
