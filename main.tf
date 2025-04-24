@@ -51,3 +51,16 @@ for key in $(aws kms list-keys --query 'Keys[*].KeyId' --output text); do
     aws kms list-aliases --query "Aliases[?TargetKeyId=='$key'].AliasName" --output text
   fi
 done > included_resources.txt
+
+
+
+
+
+if you check the iam stuff i did youll see. they go in data blocks, then referenced in the policy like data.aws_iam_policy_document.<policy-doc-name-here>.json
+ 
+this makes it way easier down the line
+ 
+also instead of using the json syntax for them we jsut use the terraform one so it can detect issues
+ 
+it cant on the json ones 
+ 
