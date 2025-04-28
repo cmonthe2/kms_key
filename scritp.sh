@@ -222,3 +222,162 @@ done
 
 echo "✅ HCL-style KMS files generated in $(pwd)"
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#!/bin/bash
+
+set -e
+
+# Set AWS CLI profile and region
+export AWS_PROFILE=default
+export AWS_REGION=us-west-2
+
+mkdir -p kms_tf_output
+cd kms_tf_output || exit 1
+
+> aws_kms_key.tf
+> aws_kms_key_policy.tf
+> aws_kms_alias.tf
+> aws_kms_policy_document.tf
+> kms_import.tf
+
+# Fetch AWS Account ID dynamically
+ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
+
+KEYS=$(aws kms list-keys --query "Keys[*].KeyId" --output text)
+
+for KEY_ID in $KEYS; do
+  MANAGER=$(aws kms describe-key --key-id "$KEY_ID" --query "KeyMetadata.KeyManager" --output text)
+
+  if [[ "$MANAGER" == "CUSTOMER" ]]; then
+    echo "🔍 Processing KMS key: $KEY_ID"
+
+    METADATA=$(aws kms describe-key --key-id "$KEY_ID" --query "KeyMetadata")
+    ALIAS_NAME=$(aws kms list-aliases --query "Aliases[?TargetKeyId=='$KEY_ID'].AliasName" --output text | head -n1)
+    TAGS_JSON=$(aws kms list-resource-tags --key-id "$KEY_ID" --query "Tags")
+
+    if [[ -z "$ALIAS_NAME" ]]; then
+      RESOURCE_NAME="key_${KEY_ID:0:8}"
+    else
+      RESOURCE_NAME=$(echo "$ALIAS_NAME" | sed 's/alias\///g' | sed 's/[^a-zA-Z0-9_]/_/g')
+    fi
+
+    DESCRIPTION=$(echo "$METADATA" | jq -r '.Description')
+    KEY_USAGE=$(echo "$METADATA" | jq -r '.KeyUsage')
+    KEY_SPEC=$(echo "$METADATA" | jq -r '.CustomerMasterKeySpec')
+
+    TAGS_HCL=$(echo "$TAGS_JSON" | jq -r 'map("  \(.TagKey) = \"\(.TagValue)\"") | join("\n")')
+    TAGS_BLOCK=""
+    [[ -n "$TAGS_HCL" ]] && TAGS_BLOCK="tags = {\n$TAGS_HCL\n}"
+
+    # 1. Write aws_kms_key block
+    cat >> aws_kms_key.tf <<EOF
+resource "aws_kms_key" "$RESOURCE_NAME" {
+  description             = "$DESCRIPTION"
+  bypass_policy_lockout_safety_check = false
+  enable_key_rotation     = true
+  key_usage               = "$KEY_USAGE"
+  customer_master_key_spec = "$KEY_SPEC"
+  $TAGS_BLOCK
+}
+
+EOF
+
+    # 2. Write data "aws_iam_policy_document" block into aws_kms_policy_document.tf
+    cat >> aws_kms_policy_document.tf <<EOF
+data "aws_iam_policy_document" "${RESOURCE_NAME}_doc" {
+  statement {
+    sid    = "AllowRootAccess"
+    effect = "Allow"
+    actions = ["kms:*"]
+    resources = ["*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${ACCOUNT_ID}:root"]
+    }
+  }
+}
+
+EOF
+
+    # 3. Write aws_kms_key_policy resource
+    cat >> aws_kms_key_policy.tf <<EOF
+resource "aws_kms_key_policy" "${RESOURCE_NAME}_policy" {
+  key_id = aws_kms_key.$RESOURCE_NAME.id
+  policy = data.aws_iam_policy_document.${RESOURCE_NAME}_doc.json
+}
+
+EOF
+
+    # 4. Write aws_kms_alias block if alias exists
+    if [[ -n "$ALIAS_NAME" ]]; then
+      cat >> aws_kms_alias.tf <<EOF
+resource "aws_kms_alias" "${RESOURCE_NAME}_alias" {
+  name          = "$ALIAS_NAME"
+  target_key_id = aws_kms_key.$RESOURCE_NAME.key_id
+}
+
+EOF
+      cat >> kms_import.tf <<EOF
+import {
+  to = aws_kms_alias.${RESOURCE_NAME}_alias
+  id = "$ALIAS_NAME"
+}
+
+EOF
+    fi
+
+    # 5. Import blocks for key and policy
+    cat >> kms_import.tf <<EOF
+import {
+  to = aws_kms_key.$RESOURCE_NAME
+  id = "$KEY_ID"
+}
+
+import {
+  to = aws_kms_key_policy.${RESOURCE_NAME}_policy
+  id = "$KEY_ID"
+}
+
+EOF
+
+  fi
+
+done
+
+echo "✅ Done. Files generated in $(pwd)"
+
+
