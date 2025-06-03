@@ -90,3 +90,73 @@ resource "aws_kms_alias" "alias_monthe" {
   target_key_id = aws_kms_key.key_f7fd450e_22b4_4c71_babc_debdcf8b4803.key_id
 }
 
+
+
+
+
+
+
+
+
+data "aws_iam_policy_document" "kms_key_policy" {
+  statement {
+    sid     = "AllowRootAccountFullAccess"
+    actions = ["kms:*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::123456789012:root"]
+    }
+    resources = ["*"]
+  }
+
+  statement {
+    sid     = "AllowIAMRolesToUseKey"
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey"
+    ]
+    principals {
+      type        = "AWS"
+      identifiers = [
+        "arn:aws:iam::123456789012:role/YourAppRole",
+        "arn:aws:iam::123456789012:user/YourDevUser"
+      ]
+    }
+    resources = ["*"]
+  }
+
+  statement {
+    sid     = "AllowKeyAdminFullAccess"
+    actions = ["kms:*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::123456789012:role/KMSAdmin"]
+    }
+    resources = ["*"]
+  }
+
+  statement {
+    sid     = "AllowAWSServiceIntegration"
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey"
+    ]
+    principals {
+      type        = "Service"
+      identifiers = [
+        "glue.amazonaws.com",
+        "sns.amazonaws.com",
+        "s3.amazonaws.com",
+        "logs.amazonaws.com",
+        "lambda.amazonaws.com"
+      ]
+    }
+    resources = ["*"]
+  }
+}
